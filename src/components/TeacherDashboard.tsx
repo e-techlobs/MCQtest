@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  CalendarClock,
   CheckCircle2,
   Clock,
   Eye,
@@ -22,10 +23,12 @@ import {
   releaseAttemptResult,
   toggleTestActiveStatus,
 } from '../services/mcqService';
-import { MCQTest, TestAttempt } from '../types';
+import { MCQTest, TestAttempt, getAttemptBreakdown } from '../types';
 import { TestGeneratorPanel } from './TestGeneratorPanel';
 import { TestRunner } from './TestRunner';
 import { PrintablePaperModal } from './PrintablePaperModal';
+import { ScheduleAccessModal } from './ScheduleAccessModal';
+import { DeveloperFooter } from './DeveloperFooter';
 
 export function TeacherDashboard() {
   const { userProfile, systemSettings, logout } = useAuth();
@@ -34,6 +37,11 @@ export function TeacherDashboard() {
   const [submissions, setSubmissions] = useState<TestAttempt[]>([]);
   const [previewTest, setPreviewTest] = useState<MCQTest | null>(null);
   const [printingTest, setPrintingTest] = useState<MCQTest | null>(null);
+  const [schedulingState, setSchedulingState] = useState<{
+    test: MCQTest;
+    initialActive?: boolean;
+    expiredNotice?: boolean;
+  } | null>(null);
 
   useEffect(() => {
     if (!userProfile) return;
@@ -84,6 +92,8 @@ export function TeacherDashboard() {
     };
   }, [userProfile]);
 
+  const teacherPaperCreationAllowed = systemSettings.allowTeacherPaperCreation !== false;
+
   if (!userProfile) return null;
 
   if (previewTest) {
@@ -101,9 +111,11 @@ export function TeacherDashboard() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
+        <div className="h-1 w-full bg-gradient-to-r from-teal-600 via-blue-600 to-amber-500" />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 md:h-16 flex items-center justify-between gap-4 md:gap-8">
-          <div className="font-display text-base sm:text-lg font-bold text-slate-900 whitespace-nowrap shrink-0">
-            MeritExam
+          <div className="font-display text-base sm:text-lg font-bold text-slate-900 whitespace-nowrap shrink-0 inline-flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-xs bg-gradient-to-br from-teal-600 to-emerald-600 shrink-0" />
+            <span>MeritExam Teacher</span>
           </div>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
@@ -190,35 +202,67 @@ export function TeacherDashboard() {
           </button>
         </nav>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="font-display text-2xl font-bold text-slate-900">
-              {userProfile.fullName}
-            </h1>
-            <p className="text-sm text-slate-600 mt-1">
-              Verified Teacher · Subject: {userProfile.subject} · Class Focus: {userProfile.grade}
-            </p>
-          </div>
-          <div className="text-left md:text-right">
-            <p className="text-xs text-slate-500">Admin Examination Policy</p>
-            <p className="text-sm font-semibold text-slate-900 mt-0.5">
-              {systemSettings.resultMode === 'instant'
-                ? 'Option 1: Instant Result Mode'
-                : 'Option 2: Controlled / Admin Review Mode'}
-            </p>
+        <div className="bg-white border border-teal-200/80 rounded-xl overflow-hidden shadow-xs">
+          <div className="h-1.5 w-full bg-gradient-to-r from-teal-600 to-emerald-600" />
+          <div className="bg-gradient-to-r from-teal-50/60 via-white to-emerald-50/40 p-5 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h1 className="font-display text-2xl font-bold text-slate-900">
+                {userProfile.fullName}
+              </h1>
+              <p className="text-sm text-slate-600 mt-1">
+                Verified Teacher · Subject: <span className="font-semibold text-teal-800">{userProfile.subject}</span> · Class Focus: <span className="font-semibold text-slate-800">{userProfile.grade}</span>
+              </p>
+            </div>
+            <div className="text-left md:text-right">
+              <p className="text-xs text-slate-500">Admin Examination Policy</p>
+              <p className="text-sm font-semibold text-teal-800 mt-0.5">
+                {systemSettings.resultMode === 'instant'
+                  ? 'Option 1: Instant Result Mode'
+                  : 'Option 2: Controlled / Admin Review Mode'}
+              </p>
+              {!teacherPaperCreationAllowed && (
+                <p className="text-xs font-semibold text-orange-700 mt-1 inline-flex items-center gap-1">
+                  <PauseCircle className="w-3.5 h-3.5" />
+                  New Paper Creation Paused by Admin
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
         {activeTab === 'create' && (
-          <TestGeneratorPanel
-            creatorUid={userProfile.uid}
-            creatorName={userProfile.fullName}
-            creatorRole="teacher"
-            defaultGrade={userProfile.grade}
-            defaultSubject={userProfile.subject}
-            systemSettings={systemSettings}
-            onPublished={() => setActiveTab('bank')}
-          />
+          teacherPaperCreationAllowed ? (
+            <TestGeneratorPanel
+              creatorUid={userProfile.uid}
+              creatorName={userProfile.fullName}
+              creatorRole="teacher"
+              defaultGrade={userProfile.grade}
+              defaultSubject={userProfile.subject}
+              systemSettings={systemSettings}
+              onPublished={() => setActiveTab('bank')}
+            />
+          ) : (
+            <div className="bg-white border border-orange-200 rounded-xl p-8 text-center space-y-3 shadow-xs">
+              <div className="w-12 h-12 rounded-xl bg-orange-50 border border-orange-200 text-orange-700 flex items-center justify-center mx-auto">
+                <PauseCircle className="w-6 h-6" />
+              </div>
+              <h2 className="font-display text-xl font-bold text-slate-900">
+                Paper Creation Paused by Administrator
+              </h2>
+              <p className="text-sm text-slate-600 max-w-lg mx-auto leading-relaxed">
+                The Administrator has temporarily turned off new paper generation for teachers. You can still view, preview, or print your existing saved tests until the Administrator re-enables paper creation.
+              </p>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('bank')}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+                >
+                  Open My Existing Papers ({myTests.length})
+                </button>
+              </div>
+            </div>
+          )
         )}
 
         {activeTab === 'bank' && (
@@ -227,13 +271,15 @@ export function TeacherDashboard() {
               <h2 className="font-display text-lg font-semibold text-slate-900">
                 Published MCQ Assessments
               </h2>
-              <button
-                type="button"
-                onClick={() => setActiveTab('create')}
-                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
-              >
-                New Test
-              </button>
+              {teacherPaperCreationAllowed && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('create')}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
+                >
+                  New Test
+                </button>
+              )}
             </div>
 
             {myTests.length === 0 ? (
@@ -253,18 +299,38 @@ export function TeacherDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
-                    {myTests.map((t) => (
+                    {myTests.map((t) => {
+                      const permittedClasses =
+                        t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
+                      const startMs = t.scheduledReleaseAt ? new Date(t.scheduledReleaseAt).getTime() : NaN;
+                      const endMs = t.scheduledEndAt ? new Date(t.scheduledEndAt).getTime() : NaN;
+                      const now = Date.now();
+                      const isExpired = !Number.isNaN(endMs) && endMs < now;
+                      const isScheduled = !Number.isNaN(startMs) && startMs > now;
+                      return (
                       <tr key={t.id} className="hover:bg-slate-50">
                         <td className="py-3 px-4 font-medium text-slate-900">{t.title}</td>
                         <td className="py-3 px-4 text-slate-600">
-                          {t.grade} · {t.subject}
+                          <div>{t.grade} · {t.subject}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {t.board === 'punjab_ptb' ? 'Punjab Board (PTB)' : 'Federal Board (NBF)'} · Permitted: {permittedClasses.join(', ')}
+                          </div>
                         </td>
                         <td className="py-3 px-4 tabular-nums text-slate-700">
-                          {t.questionCount} MCQs ({t.marksPerQuestion ?? 1} mk) · {t.durationMinutes} min
+                          {t.questionCount} MCQs
+                          {(t.shortQuestions?.length ?? 0) > 0 ? ` · ${t.shortQuestions!.length} Short` : ''}
+                          {(t.longQuestions?.length ?? 0) > 0 ? ` · ${t.longQuestions!.length} Long` : ''}{' '}
+                          ({t.marksPerQuestion ?? 1} mk/MCQ) · {t.durationMinutes} min
                         </td>
                         <td className="py-3 px-4">
                           {t.isActive ? (
-                            <span className="text-xs font-semibold text-emerald-700">Active</span>
+                            isExpired ? (
+                              <span className="text-xs font-semibold text-red-700">Expired (Auto-Hidden)</span>
+                            ) : isScheduled ? (
+                              <span className="text-xs font-semibold text-amber-700">Scheduled (Countdown Active)</span>
+                            ) : (
+                              <span className="text-xs font-semibold text-emerald-700">Active</span>
+                            )
                           ) : (
                             <span className="text-xs font-semibold text-slate-500">Paused</span>
                           )}
@@ -273,8 +339,25 @@ export function TeacherDashboard() {
                               Starts: {new Date(t.scheduledReleaseAt).toLocaleString()}
                             </div>
                           )}
+                          {t.scheduledEndAt && (
+                            <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                              Closes: {new Date(t.scheduledEndAt).toLocaleString()}
+                            </div>
+                          )}
                         </td>
-                        <td className="py-3 px-4 text-right space-x-3 whitespace-nowrap">
+                        <td className="py-3 px-4 text-right space-x-2.5 whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSchedulingState({
+                                test: t,
+                                expiredNotice: isExpired,
+                              })
+                            }
+                            className="px-2.5 py-1 text-xs font-semibold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-md inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <CalendarClock className="w-3.5 h-3.5" /> Set Time / Access
+                          </button>
                           <button
                             type="button"
                             onClick={() => setPrintingTest(t)}
@@ -291,10 +374,24 @@ export function TeacherDashboard() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => void toggleTestActiveStatus(t.id, !t.isActive)}
+                            onClick={() => {
+                              if (isExpired) {
+                                setSchedulingState({
+                                  test: t,
+                                  initialActive: true,
+                                  expiredNotice: true,
+                                });
+                              } else {
+                                void toggleTestActiveStatus(t.id, !t.isActive);
+                              }
+                            }}
                             className="text-xs font-semibold text-slate-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
                           >
-                            {t.isActive ? (
+                            {isExpired ? (
+                              <>
+                                <PlayCircle className="w-3.5 h-3.5 text-emerald-700" /> Re-Activate &amp; Set Time
+                              </>
+                            ) : t.isActive ? (
                               <>
                                 <PauseCircle className="w-3.5 h-3.5" /> Pause
                               </>
@@ -313,7 +410,8 @@ export function TeacherDashboard() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -322,18 +420,40 @@ export function TeacherDashboard() {
         )}
 
         {activeTab === 'submissions' && (
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200">
-              <h2 className="font-display text-lg font-semibold text-slate-900">
-                Student Test Submissions
-              </h2>
+          <div className="space-y-5">
+            <div className="grid grid-cols-3 gap-3 sm:gap-4">
+              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                <p className="text-xs font-medium text-slate-500">Tests Published by Me</p>
+                <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
+                  {myTests.length}
+                </p>
+              </div>
+              <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
+                <p className="text-xs font-medium text-emerald-700">Present / Submitted</p>
+                <p className="font-display text-2xl font-bold text-emerald-700 tabular-nums mt-1">
+                  {submissions.filter((s) => !s.autoCancelled).length}
+                </p>
+              </div>
+              <div className="bg-white border border-orange-200 rounded-xl p-4 shadow-xs">
+                <p className="text-xs font-medium text-orange-700">Auto-Cancelled</p>
+                <p className="font-display text-2xl font-bold text-orange-700 tabular-nums mt-1">
+                  {submissions.filter((s) => s.autoCancelled).length}
+                </p>
+              </div>
             </div>
 
-            {submissions.length === 0 ? (
-              <div className="p-10 text-center text-sm text-slate-500">
-                No student submissions received yet.
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-200">
+                <h2 className="font-display text-lg font-semibold text-slate-900">
+                  Student Test Submissions
+                </h2>
               </div>
-            ) : (
+
+              {submissions.length === 0 ? (
+                <div className="p-10 text-center text-sm text-slate-500">
+                  No student submissions received yet.
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -342,12 +462,15 @@ export function TeacherDashboard() {
                       <th className="py-3 px-4">Assessment</th>
                       <th className="py-3 px-4">Class · Subject</th>
                       <th className="py-3 px-4">Score</th>
+                      <th className="py-3 px-4">Question Summary</th>
                       <th className="py-3 px-4">Release Status</th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
-                    {submissions.map((sub) => (
+                    {submissions.map((sub) => {
+                      const breakdown = getAttemptBreakdown(sub);
+                      return (
                       <tr key={sub.id} className="hover:bg-slate-50">
                         <td className="py-3 px-4">
                           <div className="font-medium text-slate-900">{sub.studentName}</div>
@@ -355,12 +478,35 @@ export function TeacherDashboard() {
                             {sub.studentIdentifier || sub.studentId.slice(0, 8)}
                           </div>
                         </td>
-                        <td className="py-3 px-4 text-slate-800">{sub.testTitle}</td>
+                        <td className="py-3 px-4">
+                          <div className="text-slate-800">{sub.testTitle}</div>
+                          {sub.autoCancelled && (
+                            <div className="text-[11px] font-semibold text-red-700 mt-0.5">
+                              Auto-Cancelled (Left Screen Lock)
+                            </div>
+                          )}
+                        </td>
                         <td className="py-3 px-4 text-slate-600">
                           {sub.grade} · {sub.subject}
                         </td>
                         <td className="py-3 px-4 tabular-nums font-semibold text-slate-900">
                           {sub.obtainedMarks ?? sub.score} / {sub.totalMarks ?? sub.totalQuestions} ({sub.percentage}%)
+                        </td>
+                        <td className="py-3 px-4 text-xs tabular-nums text-slate-600 whitespace-nowrap">
+                          {breakdown.total === 0 ? (
+                            <span className="text-slate-500">Subjective Paper</span>
+                          ) : (
+                            <>
+                              <div>
+                                Attempted: <strong className="text-slate-900">{breakdown.attempted} / {breakdown.total}</strong>
+                              </div>
+                              <div className="text-[11px] mt-0.5">
+                                <span className="text-emerald-700 font-semibold">{breakdown.correct} Correct</span> ·{' '}
+                                <span className="text-red-700 font-semibold">{breakdown.wrong} Wrong</span> ·{' '}
+                                <span className="text-amber-700 font-semibold">{breakdown.skipped} Left</span>
+                              </div>
+                            </>
+                          )}
                         </td>
                         <td className="py-3 px-4">
                           {sub.resultReleased ? (
@@ -385,25 +531,53 @@ export function TeacherDashboard() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
+            </div>
           </div>
         )}
       </main>
 
+      <DeveloperFooter />
+
       {printingTest && (
         <PrintablePaperModal
           title={printingTest.title}
+          board={printingTest.board}
+          schoolName={printingTest.schoolName}
+          examLabel={printingTest.examLabel}
+          paperDate={printingTest.paperDate}
           grade={printingTest.grade}
           subject={printingTest.subject}
           topic={printingTest.topic}
           durationMinutes={printingTest.durationMinutes}
+          sectionATimeMinutes={printingTest.sectionATimeMinutes}
+          patternLabel={printingTest.patternLabel}
           marksPerQuestion={printingTest.marksPerQuestion}
           questions={printingTest.questions}
+          shortQuestions={printingTest.shortQuestions}
+          longQuestions={printingTest.longQuestions}
+          shortChoiceNote={printingTest.shortChoiceNote}
+          longChoiceNote={printingTest.longChoiceNote}
           onClose={() => setPrintingTest(null)}
+        />
+      )}
+
+      {schedulingState && (
+        <ScheduleAccessModal
+          test={schedulingState.test}
+          initialActive={schedulingState.initialActive}
+          expiredNotice={schedulingState.expiredNotice}
+          currentUser={{
+            uid: userProfile.uid,
+            name: userProfile.fullName,
+            role: 'teacher',
+          }}
+          onClose={() => setSchedulingState(null)}
         />
       )}
     </div>

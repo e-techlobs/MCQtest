@@ -38,14 +38,36 @@ service cloud.firestore {
     function isBootstrappedAdminEmail() {
       return isVerifiedEmail() && request.auth.token.email in [
         'meranamasimkhan@gmail.com',
-        'shahzainandwalli@gmail.com'
+        'shahzainandwalli@gmail.com',
+        'fbisemcqtest@gmail.com'
       ];
+    }
+
+    function isMainAdminEmailValue(email) {
+      return email in [
+        'meranamasimkhan@gmail.com',
+        'shahzainandwalli@gmail.com',
+        'fbisemcqtest@gmail.com'
+      ];
+    }
+
+    function isMainAdmin() {
+      return isBootstrappedAdminEmail();
+    }
+
+    function isActiveSecondaryAdmin() {
+      return isVerifiedEmail() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        (
+          !('status' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.status == 'active'
+        );
     }
 
     function isAdmin() {
       return isSignedIn() && (
-        isBootstrappedAdminEmail() ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        isMainAdmin() ||
+        isActiveSecondaryAdmin()
       );
     }
 
@@ -81,6 +103,12 @@ service cloud.firestore {
       return !globalSettingsExists() || getGlobalSettings().allowStudentInstantPractice == true;
     }
 
+    function teacherPaperCreationAllowed() {
+      return !globalSettingsExists() ||
+        !('allowTeacherPaperCreation' in getGlobalSettings()) ||
+        getGlobalSettings().allowTeacherPaperCreation == true;
+    }
+
     function effectiveModeIsInstant(testData) {
       return testData.deliveryMode == 'instant' || (
         testData.deliveryMode == 'inherit' &&
@@ -99,6 +127,19 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
     // Entity Validation Helpers
     // -------------------------------------------------------------------------
+    function isValidSubject(subj) {
+      return subj is string && subj.size() >= 2 && subj.size() <= 40 && (
+        subj in [
+          'Physics', 'Chemistry', 'Biology', 'Math', 'Computer Science',
+          'English', 'Urdu', 'Islamiat', 'Pakistan Studies', 'General Science'
+        ] ||
+        subj in [
+          'General Math', 'Civics', 'Economics', 'Education', 'Islamic Studies',
+          'History', 'Geography', 'Sociology', 'Psychology', 'Home Economics'
+        ]
+      );
+    }
+
     function isValidUserAccount(data) {
       return data.keys().hasAll([
           'uid', 'email', 'fullName', 'role', 'status',
@@ -112,9 +153,9 @@ service cloud.firestore {
         data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
         data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120 &&
         data.role in ['student', 'teacher', 'admin'] &&
-        data.status in ['pending', 'approved', 'rejected'] &&
+        data.status in ['pending', 'approved', 'rejected', 'paused'] &&
         data.grade in ['9th', '10th', '1st A', '2nd Year', 'All'] &&
-        data.subject in ['Physics', 'Chemistry', 'Biology', 'Math', 'All'] &&
+        (data.subject == 'All' || isValidSubject(data.subject)) &&
         data.identifier is string && data.identifier.size() <= 64 &&
         (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128)) &&
         data.createdAt is timestamp &&
@@ -123,11 +164,13 @@ service cloud.firestore {
 
     function isValidAdminRecord(data) {
       return data.keys().hasAll(['uid', 'email', 'grantedBy', 'createdAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'grantedBy', 'status', 'createdAt', 'updatedAt']) &&
         isValidId(data.uid) &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 200 &&
         data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 &&
-        data.createdAt is timestamp;
+        (!('status' in data) || data.status in ['active', 'paused']) &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
     function isValidSystemSettings(data) {
@@ -137,11 +180,13 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'resultMode', 'testAccessMode', 'allowStudentInstantPractice',
+          'allowTeacherPaperCreation',
           'defaultTimeLimitMinutes', 'passingPercentage', 'updatedBy', 'updatedAt'
         ]) &&
         data.resultMode in ['instant', 'admin_review'] &&
         data.testAccessMode in ['instant_open', 'scheduled_window'] &&
         data.allowStudentInstantPractice is bool &&
+        (!('allowTeacherPaperCreation' in data) || data.allowTeacherPaperCreation is bool) &&
         data.defaultTimeLimitMinutes is int && data.defaultTimeLimitMinutes >= 1 && data.defaultTimeLimitMinutes <= 180 &&
         data.passingPercentage is int && data.passingPercentage >= 1 && data.passingPercentage <= 100 &&
         data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 &&
@@ -156,26 +201,49 @@ service cloud.firestore {
           'createdByRole', 'createdAt', 'updatedAt'
         ]) &&
         data.keys().hasOnly([
-          'id', 'title', 'grade', 'subject', 'topic', 'difficulty',
-          'durationMinutes', 'questionCount', 'marksPerQuestion', 'questions', 'deliveryMode',
-          'isActive', 'scheduledReleaseAt', 'createdBy', 'createdByName',
-          'createdByRole', 'createdAt', 'updatedAt'
+          'id', 'title', 'board', 'schoolName', 'examLabel', 'paperDate', 'grade', 'subject', 'topic', 'difficulty',
+          'durationMinutes', 'questionCount', 'marksPerQuestion', 'questions',
+          'shortQuestionCount', 'longQuestionCount', 'shortQuestions', 'longQuestions',
+          'shortChoiceNote', 'longChoiceNote', 'sectionATimeMinutes', 'patternLabel',
+          'deliveryMode', 'isActive', 'scheduledReleaseAt', 'scheduledEndAt', 'allowedGrades',
+          'createdBy', 'createdByName', 'createdByRole', 'createdAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         data.title is string && data.title.size() >= 3 && data.title.size() <= 160 &&
+        (!('board' in data) || data.board in ['fbise_nbf', 'punjab_ptb']) &&
+        (!('schoolName' in data) || (data.schoolName is string && data.schoolName.size() <= 140)) &&
+        (!('examLabel' in data) || (data.examLabel is string && data.examLabel.size() <= 80)) &&
+        (!('paperDate' in data) || (data.paperDate is string && data.paperDate.size() <= 40)) &&
         data.grade in ['9th', '10th', '1st A', '2nd Year'] &&
-        data.subject in ['Physics', 'Chemistry', 'Biology', 'Math'] &&
-        data.topic is string && data.topic.size() <= 160 &&
+        isValidSubject(data.subject) &&
+        data.topic is string && data.topic.size() <= 500 &&
         data.difficulty in ['Standard', 'Conceptual', 'Board Exam'] &&
         data.durationMinutes is int && data.durationMinutes >= 1 && data.durationMinutes <= 180 &&
-        data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 50 &&
+        data.questionCount is int && data.questionCount >= 0 && data.questionCount <= 200 &&
         (!('marksPerQuestion' in data) || (data.marksPerQuestion is number && data.marksPerQuestion >= 0.25 && data.marksPerQuestion <= 10)) &&
-        data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 50 &&
+        data.questions is list && data.questions.size() >= 0 && data.questions.size() <= 200 &&
         data.questions.size() == data.questionCount &&
-        data.questions[0] is map &&
+        (data.questions.size() == 0 || data.questions[0] is map) &&
+        (!('shortQuestionCount' in data) || (data.shortQuestionCount is int && data.shortQuestionCount >= 0 && data.shortQuestionCount <= 50)) &&
+        (!('longQuestionCount' in data) || (data.longQuestionCount is int && data.longQuestionCount >= 0 && data.longQuestionCount <= 25)) &&
+        (!('shortQuestions' in data) || (data.shortQuestions is list && data.shortQuestions.size() <= 50 && (data.shortQuestions.size() == 0 || data.shortQuestions[0] is map))) &&
+        (!('longQuestions' in data) || (data.longQuestions is list && data.longQuestions.size() <= 25 && (data.longQuestions.size() == 0 || data.longQuestions[0] is map))) &&
+        (!('shortChoiceNote' in data) || (data.shortChoiceNote is string && data.shortChoiceNote.size() <= 200)) &&
+        (!('longChoiceNote' in data) || (data.longChoiceNote is string && data.longChoiceNote.size() <= 200)) &&
+        (!('sectionATimeMinutes' in data) || (data.sectionATimeMinutes is int && data.sectionATimeMinutes >= 1 && data.sectionATimeMinutes <= 120)) &&
+        (!('patternLabel' in data) || (data.patternLabel is string && data.patternLabel.size() <= 120)) &&
+        (data.questionCount + (('shortQuestions' in data) ? data.shortQuestions.size() : 0) + (('longQuestions' in data) ? data.longQuestions.size() : 0)) >= 1 &&
         data.deliveryMode in ['inherit', 'instant', 'admin_review'] &&
         data.isActive is bool &&
         data.scheduledReleaseAt is string && data.scheduledReleaseAt.size() <= 64 &&
+        (!('scheduledEndAt' in data) || (data.scheduledEndAt is string && data.scheduledEndAt.size() <= 64)) &&
+        (!('allowedGrades' in data) || (
+          data.allowedGrades is list &&
+          data.allowedGrades.size() >= 1 &&
+          data.allowedGrades.size() <= 4 &&
+          data.allowedGrades[0] is string &&
+          data.allowedGrades.hasOnly(['9th', '10th', '1st A', '2nd Year'])
+        )) &&
         isValidId(data.createdBy) &&
         data.createdByName is string && data.createdByName.size() >= 1 && data.createdByName.size() <= 120 &&
         data.createdByRole in ['teacher', 'admin', 'student_practice'] &&
@@ -193,31 +261,37 @@ service cloud.firestore {
         data.keys().hasOnly([
           'id', 'testId', 'testTitle', 'testCreatorId', 'grade', 'subject',
           'studentId', 'studentName', 'studentIdentifier', 'answers',
+          'shortAnswers', 'longAnswers',
           'score', 'totalQuestions', 'marksPerQuestion', 'obtainedMarks', 'totalMarks',
           'percentage', 'deliveryModeUsed',
-          'resultReleased', 'status', 'releasedBy', 'submittedAt', 'updatedAt'
+          'resultReleased', 'status', 'releasedBy', 'autoCancelled', 'terminationReason',
+          'submittedAt', 'updatedAt'
         ]) &&
         isValidId(data.id) &&
         isValidId(data.testId) &&
         data.testTitle is string && data.testTitle.size() >= 1 && data.testTitle.size() <= 160 &&
         isValidId(data.testCreatorId) &&
         data.grade in ['9th', '10th', '1st A', '2nd Year'] &&
-        data.subject in ['Physics', 'Chemistry', 'Biology', 'Math'] &&
+        isValidSubject(data.subject) &&
         isValidId(data.studentId) &&
         data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120 &&
         data.studentIdentifier is string && data.studentIdentifier.size() <= 64 &&
-        data.answers is list && data.answers.size() >= 1 && data.answers.size() <= 50 &&
-        data.answers[0] is int &&
-        data.score is int && data.score >= 0 && data.score <= 50 &&
-        data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 50 &&
+        data.answers is list && data.answers.size() >= 0 && data.answers.size() <= 200 &&
+        (data.answers.size() == 0 || data.answers[0] is int) &&
+        (!('shortAnswers' in data) || (data.shortAnswers is list && data.shortAnswers.size() <= 50 && (data.shortAnswers.size() == 0 || data.shortAnswers[0] is string))) &&
+        (!('longAnswers' in data) || (data.longAnswers is list && data.longAnswers.size() <= 25 && (data.longAnswers.size() == 0 || data.longAnswers[0] is string))) &&
+        data.score is int && data.score >= 0 && data.score <= 200 &&
+        data.totalQuestions is int && data.totalQuestions >= 0 && data.totalQuestions <= 200 &&
         (!('marksPerQuestion' in data) || (data.marksPerQuestion is number && data.marksPerQuestion >= 0.25 && data.marksPerQuestion <= 10)) &&
-        (!('obtainedMarks' in data) || (data.obtainedMarks is number && data.obtainedMarks >= 0 && data.obtainedMarks <= 500)) &&
-        (!('totalMarks' in data) || (data.totalMarks is number && data.totalMarks >= 0.25 && data.totalMarks <= 500)) &&
+        (!('obtainedMarks' in data) || (data.obtainedMarks is number && data.obtainedMarks >= 0 && data.obtainedMarks <= 5000)) &&
+        (!('totalMarks' in data) || (data.totalMarks is number && data.totalMarks >= 0 && data.totalMarks <= 5000)) &&
         data.percentage is number && data.percentage >= 0 && data.percentage <= 100 &&
         data.deliveryModeUsed in ['instant', 'admin_review'] &&
         data.resultReleased is bool &&
         data.status in ['submitted', 'reviewed'] &&
         data.releasedBy is string && data.releasedBy.size() <= 128 &&
+        (!('autoCancelled' in data) || data.autoCancelled is bool) &&
+        (!('terminationReason' in data) || (data.terminationReason is string && data.terminationReason.size() <= 200)) &&
         data.submittedAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -239,7 +313,7 @@ service cloud.firestore {
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
         (
-          (isAdmin() && incoming().role == 'admin' && incoming().status == 'approved') ||
+          (isMainAdmin() && incoming().role == 'admin' && incoming().status == 'approved') ||
           (incoming().role in ['student', 'teacher'] && incoming().status == 'pending')
         );
 
@@ -252,7 +326,14 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (
           (
+            isMainAdmin() &&
+            (!isMainAdminEmailValue(existing().email) || (incoming().role == 'admin' && incoming().status == 'approved')) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'role', 'grade', 'subject', 'approvedBy', 'updatedAt'])
+          ) ||
+          (
             isAdmin() &&
+            existing().role != 'admin' &&
+            incoming().role != 'admin' &&
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'role', 'grade', 'subject', 'approvedBy', 'updatedAt'])
           ) ||
           (
@@ -263,15 +344,24 @@ service cloud.firestore {
           )
         );
 
-      allow delete: if isValidId(userId) && isAdmin();
+      allow delete: if isValidId(userId) && (
+        (isMainAdmin() && !isMainAdminEmailValue(existing().email)) ||
+        (isAdmin() && existing().role != 'admin')
+      );
     }
 
     match /admins/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create: if isValidId(userId) && isAdmin() && isValidAdminRecord(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidId(userId) && isAdmin() && isValidAdminRecord(incoming()) && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(userId) && isAdmin();
+      allow create: if isValidId(userId) && isMainAdmin() && isValidAdminRecord(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(userId) && isMainAdmin() && isValidAdminRecord(incoming()) &&
+        !isMainAdminEmailValue(existing().email) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (!('updatedAt' in incoming()) || incoming().updatedAt == request.time) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'grantedBy', 'updatedAt']);
+      allow delete: if isValidId(userId) && isMainAdmin() && !isMainAdminEmailValue(existing().email);
     }
 
     match /systemSettings/{settingId} {
@@ -292,12 +382,12 @@ service cloud.firestore {
       allow get: if isValidId(testId) && (
         isAdmin() ||
         isApprovedTeacher() ||
-        (isApprovedStudent() && (existing().isActive == true || existing().createdBy == request.auth.uid))
+        (isApprovedStudent() && existing().isActive == true && existing().createdByRole != 'student_practice')
       );
 
       allow list: if isAdmin() ||
         isApprovedTeacher() ||
-        (isApprovedStudent() && (existing().isActive == true || existing().createdBy == request.auth.uid));
+        (isApprovedStudent() && existing().isActive == true);
 
       allow create: if isVerifiedEmail() &&
         isValidId(testId) &&
@@ -308,13 +398,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         (
           isAdmin() ||
-          (isApprovedTeacher() && incoming().createdByRole == 'teacher') ||
-          (
-            isApprovedStudent() &&
-            studentInstantPracticeAllowed() &&
-            incoming().createdByRole == 'student_practice' &&
-            incoming().isActive == false
-          )
+          (isApprovedTeacher() && teacherPaperCreationAllowed() && incoming().createdByRole == 'teacher')
         );
 
       allow update: if isVerifiedEmail() &&
@@ -331,8 +415,10 @@ service cloud.firestore {
             isApprovedTeacher() &&
             existing().createdBy == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'title', 'topic', 'difficulty', 'durationMinutes', 'questionCount',
-              'marksPerQuestion', 'questions', 'isActive', 'scheduledReleaseAt', 'updatedAt'
+              'title', 'board', 'schoolName', 'examLabel', 'paperDate', 'topic', 'difficulty', 'durationMinutes', 'questionCount',
+              'marksPerQuestion', 'questions', 'shortQuestionCount', 'longQuestionCount',
+              'shortQuestions', 'longQuestions', 'shortChoiceNote', 'longChoiceNote', 'sectionATimeMinutes', 'patternLabel',
+              'isActive', 'scheduledReleaseAt', 'scheduledEndAt', 'allowedGrades', 'updatedAt'
             ])
           )
         );

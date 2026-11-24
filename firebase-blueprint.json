@@ -31,8 +31,8 @@
         },
         "status": {
           "type": "string",
-          "enum": ["pending", "approved", "rejected"],
-          "description": "Admin approval status. Students and teachers start as pending until verified by Admin."
+          "enum": ["pending", "approved", "rejected", "paused"],
+          "description": "Admin approval status. Students and teachers start as pending until verified by Admin; secondary admins can be temporarily paused by Main Admin."
         },
         "grade": {
           "type": "string",
@@ -41,7 +41,13 @@
         },
         "subject": {
           "type": "string",
-          "enum": ["Physics", "Chemistry", "Biology", "Math", "All"],
+          "enum": [
+            "Physics", "Chemistry", "Biology", "Math", "Computer Science",
+            "English", "Urdu", "Islamiat", "Pakistan Studies", "General Science",
+            "General Math", "Civics", "Economics", "Education", "Islamic Studies",
+            "History", "Geography", "Sociology", "Psychology", "Home Economics",
+            "All"
+          ],
           "description": "Primary subject specialization for teachers or focus subject."
         },
         "identifier": {
@@ -90,10 +96,20 @@
           "maxLength": 128,
           "description": "UID or system identifier that granted admin access."
         },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"],
+          "description": "Active or temporarily paused status for secondary administrators."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
           "description": "Timestamp when admin role was granted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp."
         }
       },
       "required": ["uid", "email", "grantedBy", "createdAt"]
@@ -116,6 +132,10 @@
         "allowStudentInstantPractice": {
           "type": "boolean",
           "description": "Whether approved students can launch instant subject-only AI MCQ tests directly."
+        },
+        "allowTeacherPaperCreation": {
+          "type": "boolean",
+          "description": "Whether approved teachers are allowed to generate and publish new papers (Admin can pause/resume anytime)."
         },
         "defaultTimeLimitMinutes": {
           "type": "integer",
@@ -140,7 +160,7 @@
     },
     "MCQTest": {
       "title": "MCQTest",
-      "description": "Subject-based MCQ test for 9th, 1st A, or 2nd Year across Physics, Chemistry, Biology, or Math.",
+      "description": "Subject-based MCQ test for 9th, 10th, 1st A, or 2nd Year across FBISE NBF Sciences, Compulsory, and Arts subjects.",
       "type": "object",
       "properties": {
         "id": {
@@ -156,6 +176,26 @@
           "maxLength": 160,
           "description": "Test title."
         },
+        "board": {
+          "type": "string",
+          "enum": ["fbise_nbf", "punjab_ptb"],
+          "description": "Optional curriculum board (Federal Board NBF vs Punjab Board PTB)."
+        },
+        "schoolName": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "Optional school or institution name printed at top of paper."
+        },
+        "examLabel": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Optional exam type (e.g. First Term, Send-Up, Monthly Assessment)."
+        },
+        "paperDate": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Optional examination date string."
+        },
         "grade": {
           "type": "string",
           "enum": ["9th", "10th", "1st A", "2nd Year"],
@@ -163,13 +203,18 @@
         },
         "subject": {
           "type": "string",
-          "enum": ["Physics", "Chemistry", "Biology", "Math"],
+          "enum": [
+            "Physics", "Chemistry", "Biology", "Math", "Computer Science",
+            "English", "Urdu", "Islamiat", "Pakistan Studies", "General Science",
+            "General Math", "Civics", "Economics", "Education", "Islamic Studies",
+            "History", "Geography", "Sociology", "Psychology", "Home Economics"
+          ],
           "description": "Academic subject."
         },
         "topic": {
           "type": "string",
-          "maxLength": 160,
-          "description": "Optional chapter or syllabus focus."
+          "maxLength": 500,
+          "description": "Optional chapter, multi-chapter list, or syllabus focus."
         },
         "difficulty": {
           "type": "string",
@@ -190,7 +235,42 @@
         },
         "questions": {
           "type": "array",
-          "description": "Array of structured MCQ items (1 to 50)."
+          "description": "Array of structured MCQ items (0 to 200)."
+        },
+        "shortQuestionCount": {
+          "type": "integer",
+          "description": "Optional number of short questions (0 to 50)."
+        },
+        "longQuestionCount": {
+          "type": "integer",
+          "description": "Optional number of long/descriptive questions (0 to 25)."
+        },
+        "shortQuestions": {
+          "type": "array",
+          "description": "Optional array of structured short-answer questions (0 to 50), each optionally including an OR alternative."
+        },
+        "longQuestions": {
+          "type": "array",
+          "description": "Optional array of structured long/descriptive questions (0 to 25), each optionally including an OR alternative."
+        },
+        "shortChoiceNote": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional section instruction for short questions (e.g. Attempt any 6 out of 9)."
+        },
+        "longChoiceNote": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional section instruction for long questions (e.g. Attempt any 3 questions)."
+        },
+        "sectionATimeMinutes": {
+          "type": "integer",
+          "description": "Optional Section-A time allowed in minutes."
+        },
+        "patternLabel": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Optional official FBISE pattern identifier label."
         },
         "deliveryMode": {
           "type": "string",
@@ -205,6 +285,15 @@
           "type": "string",
           "maxLength": 64,
           "description": "Optional ISO timestamp for scheduled release."
+        },
+        "scheduledEndAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Optional ISO timestamp when the paper closes and is hidden from students."
+        },
+        "allowedGrades": {
+          "type": "array",
+          "description": "Optional list of classes permitted to view and attempt this test."
         },
         "createdBy": {
           "type": "string",
@@ -271,7 +360,12 @@
         },
         "subject": {
           "type": "string",
-          "enum": ["Physics", "Chemistry", "Biology", "Math"],
+          "enum": [
+            "Physics", "Chemistry", "Biology", "Math", "Computer Science",
+            "English", "Urdu", "Islamiat", "Pakistan Studies", "General Science",
+            "General Math", "Civics", "Economics", "Education", "Islamic Studies",
+            "History", "Geography", "Sociology", "Psychology", "Home Economics"
+          ],
           "description": "Subject."
         },
         "studentId": {
@@ -293,6 +387,14 @@
         "answers": {
           "type": "array",
           "description": "Array of chosen option indices (-1 for unanswered)."
+        },
+        "shortAnswers": {
+          "type": "array",
+          "description": "Optional array of student responses to short questions."
+        },
+        "longAnswers": {
+          "type": "array",
+          "description": "Optional array of student responses to long questions."
         },
         "score": {
           "type": "integer",
@@ -336,6 +438,15 @@
           "type": "string",
           "maxLength": 128,
           "description": "Admin UID who released the result, or empty string."
+        },
+        "autoCancelled": {
+          "type": "boolean",
+          "description": "True if the exam was automatically submitted and cancelled due to breaking screen lock."
+        },
+        "terminationReason": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Reason recorded when the exam was automatically submitted and cancelled."
         },
         "submittedAt": {
           "type": "string",
