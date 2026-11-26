@@ -19,6 +19,7 @@ import {
   TestDeliveryOverride,
   getSyllabusChapters,
 } from '../types';
+import { getActiveEditionClass } from '../config/appEdition';
 import { generateMCQsFromServer, publishMCQTest } from '../services/mcqService';
 import {
   FBISE_PATTERN_MODES,
@@ -40,6 +41,7 @@ interface TestGeneratorPanelProps {
   creatorRole: 'teacher' | 'admin';
   defaultSubject?: SubjectName | 'All';
   defaultGrade?: GradeLevel | 'All';
+  lockedGrade?: GradeLevel;
   systemSettings: SystemSettings;
   onPublished?: () => void;
 }
@@ -50,11 +52,15 @@ export function TestGeneratorPanel({
   creatorRole,
   defaultSubject,
   defaultGrade,
+  lockedGrade,
   systemSettings,
   onPublished,
 }: TestGeneratorPanelProps) {
+  const activeEdition = getActiveEditionClass();
+  const effectiveLockedGrade: GradeLevel | undefined =
+    lockedGrade ?? (activeEdition !== 'All' ? activeEdition : undefined);
   const initialGrade: GradeLevel =
-    defaultGrade && defaultGrade !== 'All' ? defaultGrade : '9th';
+    effectiveLockedGrade ?? (defaultGrade && defaultGrade !== 'All' ? defaultGrade : '9th');
   const initialSubject: SubjectName =
     defaultSubject && defaultSubject !== 'All' ? defaultSubject : 'Physics';
   const initialPattern = getOfficialPattern('fbise_nbf', initialGrade, initialSubject, 'reformed_50_50');
@@ -635,8 +641,10 @@ export function TestGeneratorPanel({
               Class / Grade
             </label>
             <select
-              value={grade}
+              value={effectiveLockedGrade ?? grade}
+              disabled={Boolean(effectiveLockedGrade)}
               onChange={(e) => {
+                if (effectiveLockedGrade) return;
                 const nextGrade = e.target.value as GradeLevel;
                 setGrade(nextGrade);
                 setAllowedGrades([nextGrade]);
@@ -644,9 +652,9 @@ export function TestGeneratorPanel({
                 setTopic('');
                 applyPatternToForm(board, nextGrade, subject, patternMode);
               }}
-              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-slate-100 disabled:text-slate-700"
             >
-              {GRADES.map((g) => (
+              {(effectiveLockedGrade ? [effectiveLockedGrade] : GRADES).map((g) => (
                 <option key={g} value={g}>
                   {GRADE_LABELS[g]}
                 </option>
@@ -1248,13 +1256,15 @@ export function TestGeneratorPanel({
                 <span className="text-[11px] font-semibold text-slate-700 mr-1">
                   Permitted Classes:
                 </span>
-                {GRADES.map((g) => {
-                  const checked = allowedGrades.includes(g);
+                {(effectiveLockedGrade ? [effectiveLockedGrade] : GRADES).map((g) => {
+                  const checked = effectiveLockedGrade ? g === effectiveLockedGrade : allowedGrades.includes(g);
                   return (
                     <button
                       key={g}
                       type="button"
+                      disabled={Boolean(effectiveLockedGrade)}
                       onClick={() => {
+                        if (effectiveLockedGrade) return;
                         setAllowedGrades((prev) => {
                           if (prev.includes(g)) {
                             return prev.length > 1 ? prev.filter((item) => item !== g) : prev;
@@ -1262,7 +1272,7 @@ export function TestGeneratorPanel({
                           return [...prev, g];
                         });
                       }}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded-md border cursor-pointer transition-colors inline-flex items-center gap-1 ${
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md border cursor-pointer disabled:cursor-default transition-colors inline-flex items-center gap-1 ${
                         checked
                           ? 'bg-blue-700 border-blue-700 text-white'
                           : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'

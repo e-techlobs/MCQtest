@@ -112,6 +112,139 @@ function addDirectoryToZip(zip: JSZip, baseDir: string, currentDir: string) {
   }
 }
 
+interface EditionZipConfig {
+  grade: '9th' | '10th' | '1st A' | '2nd Year' | 'All';
+  titleLabel: string;
+  zipFilename: string;
+}
+
+function resolveEditionZipConfig(raw: unknown): EditionZipConfig {
+  const val = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (val === '9th' || val === '9') {
+    return {
+      grade: '9th',
+      titleLabel: '9th Class (SSC-I)',
+      zipFilename: 'meritexam-9th-class.zip',
+    };
+  }
+  if (val === '10th' || val === '10') {
+    return {
+      grade: '10th',
+      titleLabel: '10th Class (SSC-II)',
+      zipFilename: 'meritexam-10th-class.zip',
+    };
+  }
+  if (val === '1st-a' || val === '1st a' || val === '1st-year' || val === '11th') {
+    return {
+      grade: '1st A',
+      titleLabel: '1st Year / 11th (HSSC-I)',
+      zipFilename: 'meritexam-1st-year.zip',
+    };
+  }
+  if (val === '2nd-year' || val === '2nd year' || val === '12th') {
+    return {
+      grade: '2nd Year',
+      titleLabel: '2nd Year / 12th (HSSC-II)',
+      zipFilename: 'meritexam-2nd-year.zip',
+    };
+  }
+  return {
+    grade: 'All',
+    titleLabel: 'Complete All-Classes (9th, 10th, 1st A & 2nd Year)',
+    zipFilename: 'meritexam-complete-all-classes.zip',
+  };
+}
+
+function buildDeploymentGuideText(cfg: EditionZipConfig): string {
+  return `====================================================================
+MERITEXAM DEPLOYMENT GUIDE — ${cfg.titleLabel.toUpperCase()}
+====================================================================
+
+EDITION INCLUDED IN THIS ZIP:
+- Locked Class Mode: ${cfg.grade} (${cfg.titleLabel})
+
+STEP 1: UPLOAD TO GITHUB
+1. Create a GitHub repository in your target GitHub account.
+2. Upload all files from this ZIP to the repository (extract first, then push/upload).
+
+STEP 2: DEPLOY FREE ON VERCEL OR NETLIFY
+- Build Command: npm run build
+- Output Directory: dist
+- Install Command: npm install --legacy-peer-deps
+- Environment Variables to add in Vercel / Netlify Settings:
+  1) GEMINI_API_KEY = <your free Google AI Studio Gemini API key>
+  2) Optional override: VITE_APP_CLASS = "${cfg.grade}"
+
+STEP 3: CONNECT OWN FREE FIREBASE PROJECT (FOR INDEPENDENT FREE QUOTA)
+1. Create a free Firebase project (Spark Plan) at https://console.firebase.google.com
+2. Enable Authentication -> Google Sign-In.
+3. Add your new Vercel/Netlify custom domain inside:
+   Authentication -> Settings -> Authorized domains.
+4. Create a Cloud Firestore database and deploy the included "firestore.rules" file.
+5. Replace "firebase-applet-config.json" with your new Firebase project's web config
+   (set "firestoreDatabaseId": "(default)" unless using a named database).
+
+====================================================================
+اردو رہنمائی (URDU GUIDE)
+====================================================================
+یہ ZIP فائل خاص طور پر "${cfg.titleLabel}" کے لیے تیار کی گئی ہے۔
+1. اس کو اپنے علیحدہ GitHub اکاؤنٹ میں اپ لوڈ کریں۔
+2. Vercel یا Netlify پر فری Deploy کریں اور Environment Variables میں اپنا GEMINI_API_KEY شامل کریں۔
+3. مکمل الگ فری Firebase حد (50k Reads / 20k Writes روزانہ) کے لیے نیا فری Firebase پروجیکٹ بنائیں،
+   Google Login آن کریں، اپنا نیا ڈومین Authorized Domains میں ایڈ کریں، اور firebase-applet-config.json تبدیل کریں۔
+====================================================================
+`;
+}
+
+async function applyEditionOverridesToZip(zip: JSZip, cfg: EditionZipConfig) {
+  zip.file('DEPLOYMENT_GUIDE_URDU_ENGLISH.txt', buildDeploymentGuideText(cfg));
+  if (cfg.grade === 'All') return;
+
+  const editionFile = zip.file('src/config/appEdition.ts');
+  if (editionFile) {
+    const content = await editionFile.async('string');
+    const updated = content.replace(
+      /export const BUILD_LOCKED_CLASS: EditionClass = ['"][^'"]+['"];/,
+      `export const BUILD_LOCKED_CLASS: EditionClass = '${cfg.grade}';`,
+    );
+    zip.file('src/config/appEdition.ts', updated);
+  }
+
+  const indexFile = zip.file('index.html');
+  if (indexFile) {
+    const html = await indexFile.async('string');
+    const title = `MeritExam — ${cfg.titleLabel} Examination Portal`;
+    const desc = `${cfg.titleLabel} Federal Board (FBISE / NBF) & Punjab Board (PTB) online examination portal covering all 20 Sciences, Compulsory, and Arts books.`;
+    const updatedHtml = html
+      .replace(/<title>[\s\S]*?<\/title>/i, `<title>${title}</title>`)
+      .replace(
+        /<meta\s+name="description"\s+content="[^"]*"\s*\/>/i,
+        `<meta name="description" content="${desc}" />`,
+      )
+      .replace(
+        /<meta\s+property="og:title"\s+content="[^"]*"\s*\/>/i,
+        `<meta property="og:title" content="${title}" />`,
+      )
+      .replace(
+        /<meta\s+property="og:description"\s+content="[^"]*"\s*\/>/i,
+        `<meta property="og:description" content="${desc}" />`,
+      );
+    zip.file('index.html', updatedHtml);
+  }
+
+  const metaFile = zip.file('metadata.json');
+  if (metaFile) {
+    try {
+      const meta = JSON.parse(await metaFile.async('string')) as Record<string, unknown>;
+      meta.name = `MeritExam — ${cfg.grade}`;
+      meta.description = `${cfg.titleLabel} Federal Board (FBISE / NBF) & Punjab Board (PTB) examination portal.`;
+      zip.file('metadata.json', JSON.stringify(meta, null, 2));
+    } catch {
+      // ignore if invalid JSON
+    }
+  }
+}
+
 const VALID_GRADES = ['9th', '10th', '1st A', '2nd Year'] as const;
 const VALID_SUBJECTS = [
   'Physics',
@@ -706,8 +839,11 @@ async function startServer() {
         return;
       }
 
+      const cfg = resolveEditionZipConfig(req.query.class);
       const zip = new JSZip();
       addDirectoryToZip(zip, __dirname, __dirname);
+      await applyEditionOverridesToZip(zip, cfg);
+
       const buffer = await zip.generateAsync({
         type: 'nodebuffer',
         compression: 'DEFLATE',
@@ -715,7 +851,7 @@ async function startServer() {
       });
 
       res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', 'attachment; filename="meritexam-fbise-nbf.zip"');
+      res.setHeader('Content-Disposition', `attachment; filename="${cfg.zipFilename}"`);
       res.send(buffer);
     } catch (err) {
       console.error('Export ZIP error:', err);

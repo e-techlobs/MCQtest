@@ -4,6 +4,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  Eye,
   FileText,
   Lock,
   LogOut,
@@ -18,16 +19,26 @@ import {
   where,
 } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import {
+  getActiveEditionClass,
+  getClassPathSlug,
+  isBuildLockedEdition,
+} from '../config/appEdition';
 import { OperationType, db, handleFirestoreError } from '../lib/firebase';
 import {
+  GRADES,
+  GRADE_LABELS,
+  GradeLevel,
   MCQTest,
   SUBJECT_GROUPS,
   SubjectName,
   TestAttempt,
   getAttemptBreakdown,
+  isSingleStudentGrade,
 } from '../types';
 import { TestRunner } from './TestRunner';
 import { DeveloperFooter } from './DeveloperFooter';
+import { buildStudentPerformanceReport } from '../utils/studentRecord';
 
 interface SubjectAccentStyle {
   bar: string;
@@ -145,14 +156,25 @@ function formatCountdownParts(diffMs: number) {
 }
 
 export function StudentDashboard() {
-  const { userProfile, systemSettings, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'tests' | 'previous' | 'results'>('tests');
+  const { userProfile, systemSettings, updateOwnStudentClass, logout } = useAuth();
+  const [activeTab, setActiveTab] = useState<'tests' | 'results' | 'answer_key'>('tests');
   const [subjectFilter, setSubjectFilter] = useState<SubjectName | 'All'>('All');
 
   const [activeTests, setActiveTests] = useState<MCQTest[]>([]);
   const [attempts, setAttempts] = useState<TestAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const activeEdition = getActiveEditionClass();
+  const buildLocked = isBuildLockedEdition();
+  const isSingleClassEdition = activeEdition !== 'All';
+
+  // Legacy 'All' class migration gate state
+  const [selectedClassToLock, setSelectedClassToLock] = useState<GradeLevel>(
+    isSingleClassEdition ? activeEdition : '9th',
+  );
+  const [savingClassLock, setSavingClassLock] = useState(false);
+  const [classLockError, setClassLockError] = useState<string | null>(null);
 
   // Active Test Runner state
   const [runningTest, setRunningTest] = useState<MCQTest | null>(null);
@@ -241,10 +263,12 @@ export function StudentDashboard() {
 
   const eligibleClassTests = useMemo(() => {
     const normalizedStudentGrade = studentGrade?.trim();
+    if (!normalizedStudentGrade || !isSingleStudentGrade(normalizedStudentGrade)) {
+      return [];
+    }
     return activeTests
       .filter((t) => t.isActive === true && t.createdByRole !== 'student_practice')
       .filter((t) => {
-        if (!normalizedStudentGrade || normalizedStudentGrade === 'All') return true;
         const allowed =
           t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
         return allowed.some((g) => String(g).trim() === normalizedStudentGrade);
@@ -319,17 +343,45 @@ export function StudentDashboard() {
     return rows;
   }, [attempts, allMissedTests]);
 
-  const filteredPreviousRows = useMemo(() => {
-    if (subjectFilter === 'All') return resultAttendanceRows;
-    return resultAttendanceRows.filter((row) =>
-      row.kind === 'attempt'
-        ? row.attempt.subject === subjectFilter
-        : row.test.subject === subjectFilter,
+  const answerKeyEligibleAttempts = useMemo(() => {
+    const globalAllowed = systemSettings.allowStudentAnswerKeyReview === true;
+    return attempts.filter((attempt) => {
+      if (attempt.autoCancelled || !attempt.resultReleased) return false;
+      if (!globalAllowed && attempt.answerKeyReleased !== true) return false;
+      return activeTestsById.has(attempt.testId);
+    });
+  }, [attempts, systemSettings.allowStudentAnswerKeyReview, activeTestsById]);
+
+  const hasAnswerKeyAccess = answerKeyEligibleAttempts.length > 0;
+
+  useEffect(() => {
+    if (activeTab === 'answer_key' && !hasAnswerKeyAccess) {
+      setActiveTab('results');
+    }
+  }, [activeTab, hasAnswerKeyAccess]);
+
+  const studentReport = useMemo(() => {
+    if (!userProfile) return null;
+    return buildStudentPerformanceReport({
+      student: userProfile,
+      allAttempts: attempts,
+      conductedTests: activeTests,
+      includeHeldScores: false,
+      nowMs,
+    });
+  }, [userProfile, attempts, activeTests, nowMs]);
+
+  function isAttemptAnswerKeyAllowed(attempt: TestAttempt): boolean {
+    return (
+      !attempt.autoCancelled &&
+      Boolean(attempt.resultReleased) &&
+      (systemSettings.allowStudentAnswerKeyReview === true ||
+        attempt.answerKeyReleased === true)
     );
-  }, [resultAttendanceRows, subjectFilter]);
+  }
 
   function handleOpenAttemptReview(attempt: TestAttempt) {
-    if (!attempt.resultReleased || attempt.autoCancelled) return;
+    if (!isAttemptAnswerKeyAllowed(attempt)) return;
     const matchedTest = activeTestsById.get(attempt.testId);
     if (!matchedTest) return;
     setReviewingAttempt(attempt);
@@ -337,6 +389,182 @@ export function StudentDashboard() {
   }
 
   if (!userProfile) return null;
+
+  if (!isSingleStudentGrade(userProfile.grade)) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <header className="bg-white border-b border-slate-200">
+          <div className="h-1 w-full bg-gradient-to-r from-blue-600 via-teal-500 to-amber-500" />
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
+            <div className="font-display text-base sm:text-lg font-bold text-slate-900 inline-flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-xs bg-gradient-to-br from-blue-600 to-indigo-600 shrink-0" />
+              <span>MeritExam</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-xl bg-white border border-amber-300 rounded-xl overflow-hidden shadow-sm">
+            <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 to-blue-600" />
+            <div className="p-6 sm:p-8 space-y-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="font-display text-xl font-bold text-slate-900">
+                    Select Your Single Enrolled Class
+                  </h1>
+                  <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                    Welcome, <span className="font-semibold text-slate-900">{userProfile.fullName}</span>. Your account previously had{' '}
+                    <span className="font-semibold text-amber-800">All Classes</span> access. Under the updated student policy, every student account must belong to one specific class only.
+                  </p>
+                </div>
+              </div>
+
+              {classLockError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-800">
+                  {classLockError}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Choose Your Class (Required)
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {(isSingleClassEdition ? [activeEdition] : GRADES).map((g) => {
+                    const active = selectedClassToLock === g;
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        onClick={() => setSelectedClassToLock(g)}
+                        className={`p-3.5 rounded-lg border text-left transition-all cursor-pointer ${
+                          active
+                            ? 'bg-blue-50 border-blue-600 ring-2 ring-blue-600/20 text-blue-950'
+                            : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800'
+                        }`}
+                      >
+                        <div className="font-display text-sm font-bold">{g}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">{GRADE_LABELS[g]}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
+                Once saved, your dashboard will show only examinations and records for{' '}
+                <strong className="text-slate-800">{GRADE_LABELS[selectedClassToLock]}</strong>. Any future class change requires Administrator approval.
+              </p>
+
+              <button
+                type="button"
+                disabled={savingClassLock}
+                onClick={async () => {
+                  setClassLockError(null);
+                  setSavingClassLock(true);
+                  try {
+                    await updateOwnStudentClass(selectedClassToLock);
+                  } catch (err) {
+                    setClassLockError(
+                      err instanceof Error
+                        ? err.message
+                        : 'Could not save your class selection. Please try again.',
+                    );
+                  } finally {
+                    setSavingClassLock(false);
+                  }
+                }}
+                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 disabled:opacity-60 rounded-lg transition-all cursor-pointer"
+              >
+                {savingClassLock
+                  ? 'Saving Class...'
+                  : `Confirm & Continue to ${selectedClassToLock} Portal`}
+              </button>
+            </div>
+          </div>
+        </main>
+        <DeveloperFooter />
+      </div>
+    );
+  }
+
+  if (isSingleClassEdition && userProfile.grade !== activeEdition) {
+    const ownClassSlug = getClassPathSlug(userProfile.grade as GradeLevel);
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <header className="bg-white border-b border-slate-200">
+          <div className="h-1 w-full bg-gradient-to-r from-blue-600 via-teal-500 to-amber-500" />
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
+            <div className="font-display text-base sm:text-lg font-bold text-slate-900 inline-flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-xs bg-gradient-to-br from-blue-600 to-indigo-600 shrink-0" />
+              <span>MeritExam</span>
+              <span className="px-2 py-0.5 text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200 rounded">
+                {activeEdition}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
+        </header>
+        <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-lg bg-white border border-amber-300 rounded-xl overflow-hidden shadow-sm">
+            <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 to-blue-600" />
+            <div className="p-6 sm:p-8 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="font-display text-xl font-bold text-slate-900">
+                    {GRADE_LABELS[activeEdition]} Portal Only
+                  </h1>
+                  <p className="text-sm text-slate-600 mt-1 leading-relaxed">
+                    This link is exclusively for <strong>{GRADE_LABELS[activeEdition]}</strong>. Your account is enrolled in{' '}
+                    <strong className="text-blue-800">{GRADE_LABELS[userProfile.grade as GradeLevel]}</strong>.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                {!buildLocked && (
+                  <a
+                    href={ownClassSlug}
+                    className="px-4 py-2 text-sm font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors"
+                  >
+                    Open {userProfile.grade} Portal
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void logout()}
+                  className="px-4 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+        <DeveloperFooter />
+      </div>
+    );
+  }
 
   if (runningTest) {
     return (
@@ -362,6 +590,11 @@ export function StudentDashboard() {
           <div className="font-display text-base sm:text-lg font-bold text-slate-900 whitespace-nowrap shrink-0 inline-flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-xs bg-gradient-to-br from-blue-600 to-indigo-600 shrink-0" />
             <span>MeritExam</span>
+            {isSingleClassEdition && (
+              <span className="px-2 py-0.5 text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200 rounded">
+                {activeEdition}
+              </span>
+            )}
           </div>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
@@ -378,17 +611,6 @@ export function StudentDashboard() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('previous')}
-              className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
-                activeTab === 'previous'
-                  ? 'border-blue-700 text-slate-900 font-semibold'
-                  : 'border-transparent text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Previous Tests ({totalResultsCount})
-            </button>
-            <button
-              type="button"
               onClick={() => setActiveTab('results')}
               className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums ${
                 activeTab === 'results'
@@ -396,8 +618,22 @@ export function StudentDashboard() {
                   : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
             >
-              Results &amp; Attendance ({totalResultsCount})
+              Results &amp; Record ({totalResultsCount})
             </button>
+            {hasAnswerKeyAccess && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('answer_key')}
+                className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums inline-flex items-center gap-1.5 ${
+                  activeTab === 'answer_key'
+                    ? 'border-emerald-700 text-emerald-900 font-semibold'
+                    : 'border-transparent text-emerald-700 hover:text-emerald-900'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Answer Key ({answerKeyEligibleAttempts.length})
+              </button>
+            )}
           </nav>
 
           <button
@@ -412,7 +648,10 @@ export function StudentDashboard() {
       </header>
 
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8 space-y-5 sm:space-y-6 flex-1">
-        <nav aria-label="Student sections" className="grid grid-cols-3 gap-2 md:hidden">
+        <nav
+          aria-label="Student sections"
+          className={`grid ${hasAnswerKeyAccess ? 'grid-cols-3' : 'grid-cols-2'} gap-2 md:hidden`}
+        >
           <button
             type="button"
             onClick={() => setActiveTab('tests')}
@@ -422,18 +661,7 @@ export function StudentDashboard() {
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            To Take ({allPendingToTakeTests.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('previous')}
-            className={`px-2.5 py-2.5 text-xs font-semibold rounded-lg border text-center whitespace-nowrap truncate cursor-pointer transition-colors tabular-nums ${
-              activeTab === 'previous'
-                ? 'bg-slate-900 text-white border-slate-900'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            Previous ({totalResultsCount})
+            Upcoming ({allPendingToTakeTests.length})
           </button>
           <button
             type="button"
@@ -444,8 +672,21 @@ export function StudentDashboard() {
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            Results ({totalResultsCount})
+            Record ({totalResultsCount})
           </button>
+          {hasAnswerKeyAccess && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('answer_key')}
+              className={`px-2.5 py-2.5 text-xs font-semibold rounded-lg border text-center whitespace-nowrap truncate cursor-pointer transition-colors tabular-nums ${
+                activeTab === 'answer_key'
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+              }`}
+            >
+              Answer Key ({answerKeyEligibleAttempts.length})
+            </button>
+          )}
         </nav>
 
         {/* Student Identity & Active Mode Banner */}
@@ -582,20 +823,11 @@ export function StudentDashboard() {
                     Tests To Take (Active &amp; Upcoming)
                   </h2>
                   <p className="text-xs text-slate-500">
-                    Showing only upcoming and currently open examinations for Class {userProfile.grade}. Completed and expired tests are in Previous Tests.
+                    Showing only upcoming and currently open examinations for Class {userProfile.grade}. Submitted, expired, and cancelled papers are closed and only your marks remain in Results &amp; Record.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('previous')}
-                    className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer tabular-nums transition-colors"
-                  >
-                    <Clock className="w-3.5 h-3.5 text-slate-500" />
-                    Previous Tests ({totalResultsCount})
-                  </button>
-
                   <select
                     value={subjectFilter}
                     onChange={(e) => setSubjectFilter(e.target.value as SubjectName | 'All')}
@@ -633,17 +865,17 @@ export function StudentDashboard() {
                       No upcoming or open examinations remaining for Class {userProfile.grade}
                     </p>
                     <p className="text-xs text-slate-500 mt-1">
-                      Only pending examinations permitted by your teacher or administrator appear here.
+                      Only upcoming and active tests appear here. Completed and expired papers are closed, while your marks are saved in Results &amp; Record.
                     </p>
                   </div>
                   {totalResultsCount > 0 && (
                     <button
                       type="button"
-                      onClick={() => setActiveTab('previous')}
+                      onClick={() => setActiveTab('results')}
                       className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
                     >
-                      <Clock className="w-3.5 h-3.5" />
-                      View All Previous Tests ({totalResultsCount})
+                      <FileText className="w-3.5 h-3.5" />
+                      View My Results &amp; Record ({totalResultsCount})
                     </button>
                   )}
                 </div>
@@ -760,40 +992,6 @@ export function StudentDashboard() {
 
                           <div className="mt-5">
                             {(() => {
-                              const prevAttempt = attemptsByTestId.get(test.id);
-                              if (prevAttempt) {
-                                if (prevAttempt.autoCancelled) {
-                                  return (
-                                    <div className="w-full py-2.5 px-3 bg-red-50 border border-red-200 rounded-lg text-center space-y-1">
-                                      <div className="text-xs font-bold text-red-800 inline-flex items-center gap-1.5 justify-center">
-                                        <ShieldAlert className="w-3.5 h-3.5" />
-                                        <span>Paper Cancelled &amp; Auto-Submitted</span>
-                                      </div>
-                                      <div className="text-[11px] text-red-700">
-                                        Screen Lock was broken · Retake blocked
-                                      </div>
-                                    </div>
-                                  );
-                                }
-                                return (
-                                  <div className="w-full py-2.5 px-3 bg-emerald-50 border border-emerald-200 rounded-lg text-center space-y-1">
-                                    <div className="text-xs font-semibold text-emerald-800 inline-flex items-center gap-1.5 justify-center">
-                                      <CheckCircle2 className="w-3.5 h-3.5" />
-                                      <span>Paper Already Submitted</span>
-                                    </div>
-                                    {prevAttempt.resultReleased && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenAttemptReview(prevAttempt)}
-                                        className="text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer"
-                                      >
-                                        View Answer Key
-                                      </button>
-                                    )}
-                                  </div>
-                                );
-                              }
-
                               if (isScheduledLocked && countdown && startMs !== null) {
                                 return (
                                   <div className="w-full py-2.5 px-3 bg-amber-50 border border-amber-200 rounded-lg text-center space-y-1">
@@ -837,262 +1035,195 @@ export function StudentDashboard() {
           </div>
         )}
 
-        {activeTab === 'previous' && (
+        {activeTab === 'answer_key' && hasAnswerKeyAccess && (
           <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="font-display text-lg font-semibold text-slate-900">
-                  Previous Tests Archive ({filteredPreviousRows.length})
+                <h2 className="font-display text-lg font-semibold text-emerald-950 inline-flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-emerald-700" />
+                  Read-Only Answer Key Review ({answerKeyEligibleAttempts.length})
                 </h2>
-                <p className="text-xs text-slate-500">
-                  All previously submitted, auto-cancelled, and missed examinations for Class {userProfile.grade}.
+                <p className="text-xs text-emerald-800 mt-1">
+                  Permitted by your Administrator for papers you have already given. You can review your correct and wrong answers below — solving or re-attempting is disabled.
                 </p>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('tests')}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer tabular-nums transition-colors"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  Upcoming &amp; Open ({allPendingToTakeTests.length})
-                </button>
-
-                <select
-                  value={subjectFilter}
-                  onChange={(e) => setSubjectFilter(e.target.value as SubjectName | 'All')}
-                  aria-label="Filter previous tests by subject"
-                  className="px-3 py-1.5 text-xs font-medium bg-white border border-slate-300 rounded-lg"
-                >
-                  <option value="All">All Subjects (Sciences & Arts)</option>
-                  {SUBJECT_GROUPS.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.subjects.map((subj) => (
-                        <option key={subj} value={subj}>
-                          {subj}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('results')}
+                className="px-3.5 py-2 text-xs font-semibold text-emerald-900 bg-white border border-emerald-300 hover:bg-emerald-100 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Back to Results &amp; Record
+              </button>
             </div>
 
-            {filteredPreviousRows.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-3">
-                <FileText className="w-8 h-8 text-slate-400 mx-auto" />
-                <div>
-                  <p className="text-sm font-medium text-slate-800">
-                    No previous tests recorded yet
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Completed, cancelled, and expired tests will appear here automatically.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('tests')}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
-                >
-                  Back to Upcoming &amp; Open Tests
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {filteredPreviousRows.map((row) => {
-                  if (row.kind === 'absent') {
-                    const { test, endMs } = row;
-                    const totalQs = test.questionCount || test.questions?.length || 0;
-                    const totalMarks =
-                      Math.round(
-                        totalQs *
-                          (test.marksPerQuestion ?? 1) *
-                          100,
-                      ) / 100;
-                    return (
-                      <div
-                        key={`prev_absent_${test.id}`}
-                        className="bg-white border border-red-200 rounded-xl overflow-hidden shadow-xs flex flex-col justify-between"
-                      >
-                        <div className="h-1.5 w-full bg-gradient-to-r from-red-500 to-rose-600" />
-                        <div className="p-5 space-y-2.5 flex-1">
-                          <div className="text-xs font-medium text-red-700">
-                            {test.board === 'punjab_ptb' ? 'Punjab Board' : 'Federal NBF'} · {test.grade} · {test.subject} · Absent (Missed)
-                          </div>
-                          <h3 className="font-display text-base font-bold text-slate-900 leading-snug">
-                            {test.title}
-                          </h3>
-                          {endMs > 0 && (
-                            <p className="text-xs text-red-700 tabular-nums">
-                              Window Closed: <span className="font-semibold">{new Date(endMs).toLocaleString()}</span>
-                            </p>
-                          )}
-                          <div className="pt-3 border-t border-slate-100 space-y-2 text-xs text-slate-600 tabular-nums">
-                            <div className="flex items-center justify-between">
-                              <span>
-                                Score: <strong className="text-red-700">0 / {totalMarks} (0%)</strong>
-                              </span>
-                              <span>{test.durationMinutes} min</span>
-                            </div>
-                            <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-slate-100 text-[11px]">
-                              <div>
-                                <span className="text-slate-500 block">Attempted</span>
-                                <strong className="text-slate-900">0</strong>
-                              </div>
-                              <div>
-                                <span className="text-emerald-700 block">Correct</span>
-                                <strong className="text-emerald-700">0</strong>
-                              </div>
-                              <div>
-                                <span className="text-red-700 block">Wrong</span>
-                                <strong className="text-red-700">0</strong>
-                              </div>
-                              <div>
-                                <span className="text-amber-800 block">Left</span>
-                                <strong className="text-amber-700">{totalQs}</strong>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="px-5 py-3 bg-red-50/80 border-t border-red-100 text-xs font-semibold text-red-800 inline-flex items-center gap-1.5">
-                          <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                          Not Attempted Before Closing Time
-                        </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {answerKeyEligibleAttempts.map((attempt) => {
+                const accent = getSubjectAccent(attempt.subject);
+                const breakdown = getAttemptBreakdown(attempt);
+                const sortMs = parseTimestampMs(attempt.submittedAt) ?? 0;
+                return (
+                  <div
+                    key={`key_${attempt.id}`}
+                    className={`bg-white border ${accent.border} rounded-xl overflow-hidden shadow-xs flex flex-col justify-between`}
+                  >
+                    <div className={`h-1.5 w-full bg-gradient-to-r ${accent.bar}`} />
+                    <div className="p-5 space-y-2.5 flex-1">
+                      <div className={`text-xs font-bold uppercase tracking-wide ${accent.label}`}>
+                        {attempt.grade} · {attempt.subject} · Read-Only Key
                       </div>
-                    );
-                  }
-
-                  const { attempt, sortMs } = row;
-                  const linkedTest = activeTestsById.get(attempt.testId);
-                  const accent = getSubjectAccent(attempt.subject);
-                  const breakdown = getAttemptBreakdown(attempt);
-                  const scoreText = attempt.resultReleased
-                    ? `${attempt.obtainedMarks ?? attempt.score} / ${attempt.totalMarks ?? attempt.totalQuestions} (${attempt.percentage}%)`
-                    : 'Held Until Admin Release';
-
-                  return (
-                    <div
-                      key={`prev_attempt_${attempt.id}`}
-                      className={`bg-white border ${attempt.autoCancelled ? 'border-orange-200' : accent.border} rounded-xl overflow-hidden shadow-xs flex flex-col justify-between`}
-                    >
-                      <div
-                        className={`h-1.5 w-full bg-gradient-to-r ${
-                          attempt.autoCancelled ? 'from-orange-500 to-red-600' : accent.bar
-                        }`}
-                      />
-                      <div className="p-5 space-y-2.5 flex-1">
-                        <div className={`text-xs font-medium ${attempt.autoCancelled ? 'text-orange-700' : accent.label}`}>
-                          {attempt.grade} · {attempt.subject} ·{' '}
-                          {attempt.autoCancelled ? 'Cancelled (Screen Lock)' : 'Submitted'}
+                      <h3 className="font-display text-base font-bold text-slate-900 leading-snug">
+                        {attempt.testTitle}
+                      </h3>
+                      {sortMs > 0 && (
+                        <p className="text-xs text-slate-500 tabular-nums">
+                          Submitted: {new Date(sortMs).toLocaleString()}
+                        </p>
+                      )}
+                      <div className="pt-3 border-t border-slate-100 space-y-2 text-xs text-slate-600 tabular-nums">
+                        <div className="flex items-center justify-between">
+                          <span>
+                            Score:{' '}
+                            <strong className="text-slate-900">
+                              {attempt.obtainedMarks ?? attempt.score} /{' '}
+                              {attempt.totalMarks ?? attempt.totalQuestions} ({attempt.percentage}%)
+                            </strong>
+                          </span>
                         </div>
-                        <h3 className="font-display text-base font-bold text-slate-900 leading-snug">
-                          {attempt.testTitle}
-                        </h3>
-                        {sortMs > 0 && (
-                          <p className="text-xs text-slate-500 tabular-nums">
-                            Submitted: {new Date(sortMs).toLocaleString()}
-                          </p>
-                        )}
-                        <div className="pt-3 border-t border-slate-100 space-y-2 text-xs text-slate-600 tabular-nums">
-                          <div className="flex items-center justify-between">
-                            <span>
-                              Score: <strong className="text-slate-900">{scoreText}</strong>
-                            </span>
-                            <span>{breakdown.total} Qs</span>
-                          </div>
-                          {breakdown.total > 0 && (
-                            attempt.resultReleased && !attempt.autoCancelled ? (
-                              <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-slate-100 text-[11px]">
-                                <div>
-                                  <span className="text-slate-500 block">Attempted</span>
-                                  <strong className="text-slate-900">{breakdown.attempted}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-emerald-700 block">Correct</span>
-                                  <strong className="text-emerald-700">{breakdown.correct}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-red-700 block">Wrong</span>
-                                  <strong className="text-red-700">{breakdown.wrong}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-amber-800 block">Left</span>
-                                  <strong className="text-amber-700">{breakdown.skipped}</strong>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-600">
-                                <span>
-                                  Attempted: <strong className="text-slate-900">{breakdown.attempted} / {breakdown.total}</strong>
-                                </span>
-                                <span>
-                                  Left: <strong className="text-amber-700">{breakdown.skipped}</strong>
-                                </span>
-                              </div>
-                            )
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/70">
-                        {attempt.autoCancelled ? (
-                          <div className="text-xs font-semibold text-orange-800 inline-flex items-center gap-1.5">
-                            <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                            Auto-Cancelled (Left Screen)
-                          </div>
-                        ) : attempt.resultReleased && linkedTest ? (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenAttemptReview(attempt)}
-                            className="w-full py-2 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            View Answer Key &amp; Score
-                          </button>
-                        ) : (
-                          <div className="text-xs font-semibold text-slate-600 inline-flex items-center gap-1.5">
-                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            {attempt.resultReleased ? 'Paper Archived · Result Recorded' : 'Pending Admin Result Release'}
+                        {breakdown.total > 0 && (
+                          <div className="grid grid-cols-4 gap-1.5 pt-2 border-t border-slate-100 text-[11px]">
+                            <div>
+                              <span className="text-slate-500 block">Attempted</span>
+                              <strong className="text-slate-900">{breakdown.attempted}</strong>
+                            </div>
+                            <div>
+                              <span className="text-emerald-700 block">Correct</span>
+                              <strong className="text-emerald-700">{breakdown.correct}</strong>
+                            </div>
+                            <div>
+                              <span className="text-red-700 block">Wrong</span>
+                              <strong className="text-red-700">{breakdown.wrong}</strong>
+                            </div>
+                            <div>
+                              <span className="text-amber-800 block">Left</span>
+                              <strong className="text-amber-700">{breakdown.skipped}</strong>
+                            </div>
                           </div>
                         )}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                    <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/70">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAttemptReview(attempt)}
+                        className="w-full py-2 px-4 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        View Answer Key (Read-Only)
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
         {activeTab === 'results' && (
           <div className="space-y-5">
-            <div className="grid grid-cols-3 gap-3 sm:gap-4">
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-                <p className="text-xs font-medium text-slate-500">Total Class Tests Recorded</p>
-                <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
-                  {totalResultsCount}
-                </p>
+            {studentReport && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                    Total Tests
+                  </p>
+                  <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
+                    {studentReport.totalTestsCount}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Recorded for class</p>
+                </div>
+
+                <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
+                  <p className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wide">
+                    Tests Given
+                  </p>
+                  <p className="font-display text-2xl font-bold text-emerald-700 tabular-nums mt-1">
+                    {studentReport.givenCount}
+                  </p>
+                  <p className="text-[11px] text-emerald-700/80 mt-0.5 tabular-nums">
+                    {studentReport.cancelledCount > 0
+                      ? `+${studentReport.cancelledCount} Cancelled`
+                      : 'Submitted'}
+                  </p>
+                </div>
+
+                <div className="bg-white border border-red-200 rounded-xl p-4 shadow-xs">
+                  <p className="text-[11px] font-semibold text-red-700 uppercase tracking-wide">
+                    Not Given (Missed)
+                  </p>
+                  <p className="font-display text-2xl font-bold text-red-700 tabular-nums mt-1">
+                    {studentReport.missedCount}
+                  </p>
+                  <p className="text-[11px] text-red-700/80 mt-0.5">Marked Absent (0)</p>
+                </div>
+
+                <div className="bg-white border border-blue-200 rounded-xl p-4 shadow-xs">
+                  <p className="text-[11px] font-semibold text-blue-800 uppercase tracking-wide">
+                    Total Marks
+                  </p>
+                  <p className="font-display text-xl sm:text-2xl font-bold text-blue-900 tabular-nums mt-1">
+                    {studentReport.totalObtainedMarks} / {studentReport.totalPossibleMarks}
+                  </p>
+                  <p className="text-[11px] text-blue-700 mt-0.5 tabular-nums">
+                    {studentReport.heldCount > 0
+                      ? `${studentReport.heldCount} Held for Release`
+                      : studentReport.missedCount > 0
+                        ? `Given Only: ${studentReport.givenObtainedMarks}/${studentReport.givenPossibleMarks}`
+                        : 'All Released Tests'}
+                  </p>
+                </div>
+
+                <div
+                  className={`bg-white border rounded-xl p-4 shadow-xs col-span-2 sm:col-span-1 ${
+                    studentReport.totalPossibleMarks === 0
+                      ? 'border-slate-200'
+                      : studentReport.overallPercentage >= systemSettings.passingPercentage
+                        ? 'border-teal-200'
+                        : 'border-amber-200'
+                  }`}
+                >
+                  <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">
+                    Overall %
+                  </p>
+                  <p
+                    className={`font-display text-2xl font-bold tabular-nums mt-1 ${
+                      studentReport.totalPossibleMarks === 0
+                        ? 'text-slate-700'
+                        : studentReport.overallPercentage >= systemSettings.passingPercentage
+                          ? 'text-teal-800'
+                          : 'text-amber-800'
+                    }`}
+                  >
+                    {studentReport.overallPercentage}%
+                  </p>
+                  <p className="text-[11px] text-slate-600 mt-0.5 tabular-nums">
+                    {studentReport.missedCount > 0
+                      ? `Given Avg: ${studentReport.givenPercentage}%`
+                      : `Pass Threshold: ${systemSettings.passingPercentage}%`}
+                  </p>
+                </div>
               </div>
-              <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
-                <p className="text-xs font-medium text-emerald-700">Present / Submitted</p>
-                <p className="font-display text-2xl font-bold text-emerald-700 tabular-nums mt-1">
-                  {attempts.filter((a) => !a.autoCancelled).length}
-                </p>
-              </div>
-              <div className="bg-white border border-red-200 rounded-xl p-4 shadow-xs">
-                <p className="text-xs font-medium text-red-700">Absent (Missed)</p>
-                <p className="font-display text-2xl font-bold text-red-700 tabular-nums mt-1">
-                  {allMissedTests.length}
-                </p>
-              </div>
-            </div>
+            )}
 
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-200">
-                <h2 className="font-display text-lg font-semibold text-slate-900">
-                  My Submitted &amp; Missed Assessments
-                </h2>
+              <div className="px-6 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="font-display text-lg font-semibold text-slate-900">
+                    My Complete Test Record &amp; Marks Breakdown
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Every MCQ test you have taken or missed, with marks, percentage, and question breakdown.
+                  </p>
+                </div>
               </div>
 
               {resultAttendanceRows.length === 0 ? (
@@ -1239,17 +1370,22 @@ export function StudentDashboard() {
                                 <span className="text-xs text-red-600 inline-flex items-center gap-1">
                                   <Lock className="w-3 h-3" /> Cancelled
                                 </span>
-                              ) : attempt.resultReleased ? (
+                              ) : isAttemptAnswerKeyAllowed(attempt) && activeTestsById.has(attempt.testId) ? (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenAttemptReview(attempt)}
-                                  className="text-xs font-semibold text-blue-700 hover:underline cursor-pointer"
+                                  className="text-xs font-semibold text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
                                 >
-                                  View Answer Key
+                                  <Eye className="w-3.5 h-3.5" />
+                                  Answer Key
                                 </button>
+                              ) : attempt.resultReleased ? (
+                                <span className="text-xs text-slate-500 inline-flex items-center gap-1">
+                                  <Lock className="w-3 h-3" /> Paper Closed
+                                </span>
                               ) : (
                                 <span className="text-xs text-slate-400 inline-flex items-center gap-1">
-                                  <Lock className="w-3 h-3" /> Locked
+                                  <Lock className="w-3 h-3" /> Held
                                 </span>
                               )}
                             </td>

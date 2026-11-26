@@ -979,6 +979,7 @@ export interface SystemSettings {
   testAccessMode: TestAccessMode;
   allowStudentInstantPractice: boolean;
   allowTeacherPaperCreation?: boolean;
+  allowStudentAnswerKeyReview?: boolean;
   defaultTimeLimitMinutes: number;
   passingPercentage: number;
   updatedBy: string;
@@ -1053,6 +1054,7 @@ export interface TestAttempt {
   percentage: number;
   deliveryModeUsed: ResultMode;
   resultReleased: boolean;
+  answerKeyReleased?: boolean;
   status: 'submitted' | 'reviewed';
   releasedBy: string;
   autoCancelled?: boolean;
@@ -1082,4 +1084,9 @@ export function getAttemptBreakdown(
   const skipped = Math.max(0, total - attempted);
   return { total, attempted, correct, wrong, skipped };
 }
+
+export function isSingleStudentGrade(grade: unknown): grade is GradeLevel {
+  return typeof grade === 'string' && (GRADES as string[]).includes(grade.trim());
+}
+
 

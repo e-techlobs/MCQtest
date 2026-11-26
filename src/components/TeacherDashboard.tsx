@@ -17,6 +17,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { getActiveEditionClass } from '../config/appEdition';
 import { OperationType, db, handleFirestoreError } from '../lib/firebase';
 import {
   deleteMCQTest,
@@ -92,6 +93,17 @@ export function TeacherDashboard() {
     };
   }, [userProfile]);
 
+  const activeEdition = getActiveEditionClass();
+  const isSingleClassEdition = activeEdition !== 'All';
+  const visibleTests = isSingleClassEdition
+    ? myTests.filter((t) => {
+        const allowed = t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
+        return allowed.includes(activeEdition);
+      })
+    : myTests;
+  const visibleSubmissions = isSingleClassEdition
+    ? submissions.filter((s) => s.grade === activeEdition)
+    : submissions;
   const teacherPaperCreationAllowed = systemSettings.allowTeacherPaperCreation !== false;
 
   if (!userProfile) return null;
@@ -116,6 +128,11 @@ export function TeacherDashboard() {
           <div className="font-display text-base sm:text-lg font-bold text-slate-900 whitespace-nowrap shrink-0 inline-flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-xs bg-gradient-to-br from-teal-600 to-emerald-600 shrink-0" />
             <span>MeritExam Teacher</span>
+            {isSingleClassEdition && (
+              <span className="px-2 py-0.5 text-[11px] font-bold bg-teal-50 text-teal-800 border border-teal-200 rounded">
+                {activeEdition}
+              </span>
+            )}
           </div>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
@@ -139,7 +156,7 @@ export function TeacherDashboard() {
                   : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
             >
-              My Tests ({myTests.length})
+              My Tests ({visibleTests.length})
             </button>
             <button
               type="button"
@@ -150,7 +167,7 @@ export function TeacherDashboard() {
                   : 'border-transparent text-slate-600 hover:text-slate-900'
               }`}
             >
-              Submissions ({submissions.length})
+              Submissions ({visibleSubmissions.length})
             </button>
           </nav>
 
@@ -187,7 +204,7 @@ export function TeacherDashboard() {
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            My Tests ({myTests.length})
+            My Tests ({visibleTests.length})
           </button>
           <button
             type="button"
@@ -198,7 +215,7 @@ export function TeacherDashboard() {
                 : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
             }`}
           >
-            Results ({submissions.length})
+            Results ({visibleSubmissions.length})
           </button>
         </nav>
 
@@ -236,7 +253,8 @@ export function TeacherDashboard() {
               creatorUid={userProfile.uid}
               creatorName={userProfile.fullName}
               creatorRole="teacher"
-              defaultGrade={userProfile.grade}
+              defaultGrade={isSingleClassEdition ? activeEdition : userProfile.grade}
+              lockedGrade={isSingleClassEdition ? activeEdition : undefined}
               defaultSubject={userProfile.subject}
               systemSettings={systemSettings}
               onPublished={() => setActiveTab('bank')}
@@ -282,7 +300,7 @@ export function TeacherDashboard() {
               )}
             </div>
 
-            {myTests.length === 0 ? (
+            {visibleTests.length === 0 ? (
               <div className="p-10 text-center text-sm text-slate-500">
                 You have not published any MCQ tests yet.
               </div>
@@ -299,7 +317,7 @@ export function TeacherDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
-                    {myTests.map((t) => {
+                    {visibleTests.map((t) => {
                       const permittedClasses =
                         t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
                       const startMs = t.scheduledReleaseAt ? new Date(t.scheduledReleaseAt).getTime() : NaN;
@@ -425,19 +443,19 @@ export function TeacherDashboard() {
               <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
                 <p className="text-xs font-medium text-slate-500">Tests Published by Me</p>
                 <p className="font-display text-2xl font-bold text-slate-900 tabular-nums mt-1">
-                  {myTests.length}
+                  {visibleTests.length}
                 </p>
               </div>
               <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
                 <p className="text-xs font-medium text-emerald-700">Present / Submitted</p>
                 <p className="font-display text-2xl font-bold text-emerald-700 tabular-nums mt-1">
-                  {submissions.filter((s) => !s.autoCancelled).length}
+                  {visibleSubmissions.filter((s) => !s.autoCancelled).length}
                 </p>
               </div>
               <div className="bg-white border border-orange-200 rounded-xl p-4 shadow-xs">
                 <p className="text-xs font-medium text-orange-700">Auto-Cancelled</p>
                 <p className="font-display text-2xl font-bold text-orange-700 tabular-nums mt-1">
-                  {submissions.filter((s) => s.autoCancelled).length}
+                  {visibleSubmissions.filter((s) => s.autoCancelled).length}
                 </p>
               </div>
             </div>
@@ -449,7 +467,7 @@ export function TeacherDashboard() {
                 </h2>
               </div>
 
-              {submissions.length === 0 ? (
+              {visibleSubmissions.length === 0 ? (
                 <div className="p-10 text-center text-sm text-slate-500">
                   No student submissions received yet.
                 </div>
@@ -468,7 +486,7 @@ export function TeacherDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-sm">
-                    {submissions.map((sub) => {
+                    {visibleSubmissions.map((sub) => {
                       const breakdown = getAttemptBreakdown(sub);
                       return (
                       <tr key={sub.id} className="hover:bg-slate-50">
