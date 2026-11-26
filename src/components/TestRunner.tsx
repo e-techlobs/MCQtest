@@ -21,6 +21,7 @@ import {
   getAttemptBreakdown,
 } from '../types';
 import { submitTestAttempt } from '../services/mcqService';
+import { getEffectiveTestEndMs } from '../utils/studentRecord';
 
 interface TestRunnerProps {
   test: MCQTest;
@@ -32,9 +33,7 @@ interface TestRunnerProps {
 }
 
 function getScheduledEndMs(test: MCQTest): number | null {
-  if (!test.scheduledEndAt) return null;
-  const ms = new Date(test.scheduledEndAt).getTime();
-  return Number.isNaN(ms) ? null : ms;
+  return getEffectiveTestEndMs(test);
 }
 
 export function TestRunner({

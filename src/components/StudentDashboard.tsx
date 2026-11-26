@@ -38,7 +38,10 @@ import {
 } from '../types';
 import { TestRunner } from './TestRunner';
 import { DeveloperFooter } from './DeveloperFooter';
-import { buildStudentPerformanceReport } from '../utils/studentRecord';
+import {
+  buildStudentPerformanceReport,
+  getEffectiveTestEndMs,
+} from '../utils/studentRecord';
 
 interface SubjectAccentStyle {
   bar: string;
@@ -136,7 +139,7 @@ function getScheduledStartMs(test: MCQTest): number | null {
 }
 
 function getScheduledEndMs(test: MCQTest): number | null {
-  return parseTimestampMs(test.scheduledEndAt);
+  return getEffectiveTestEndMs(test);
 }
 
 function formatCountdownParts(diffMs: number) {

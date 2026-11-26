@@ -1378,7 +1378,7 @@ export function TestGeneratorPanel({
               <p className="text-[11px] text-slate-500 mt-1">
                 {scheduledEndAt
                   ? `Auto-hides from students after ${new Date(scheduledEndAt).toLocaleString()}.`
-                  : 'Optional: set a closing time so expired papers vanish automatically.'}
+                  : 'If left blank: scheduled papers auto-close after Start + Duration, and immediate papers auto-close after 12 hours.'}
               </p>
             </div>
 

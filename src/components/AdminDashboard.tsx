@@ -73,7 +73,10 @@ import { PlatformBrochureModal } from './PlatformBrochureModal';
 import { ClassDeploymentsModal } from './ClassDeploymentsModal';
 import { DeveloperFooter } from './DeveloperFooter';
 import { getActiveEditionClass, getClassPathSlug } from '../config/appEdition';
-import { buildStudentPerformanceReport } from '../utils/studentRecord';
+import {
+  buildStudentPerformanceReport,
+  getEffectiveTestEndMs,
+} from '../utils/studentRecord';
 
 function parseTimestampMs(value: unknown): number | null {
   if (!value) return null;
@@ -244,7 +247,7 @@ export function AdminDashboard() {
 
     conductedTests.forEach((t) => {
       if (!t.isActive) return;
-      const endMs = parseTimestampMs(t.scheduledEndAt);
+      const endMs = getEffectiveTestEndMs(t);
       if (endMs === null || nowMs <= endMs) return;
 
       const allowed =
@@ -341,7 +344,7 @@ export function AdminDashboard() {
       resultsTestFilter === 'all' ? true : t.id === resultsTestFilter,
     );
     const closedTestsCount = matchingTests.filter((t) => {
-      const endMs = parseTimestampMs(t.scheduledEndAt);
+      const endMs = getEffectiveTestEndMs(t);
       return t.isActive && endMs !== null && nowMs > endMs;
     }).length;
 
@@ -1490,9 +1493,9 @@ export function AdminDashboard() {
                         const permittedClasses =
                           t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
                         const startMs = t.scheduledReleaseAt ? new Date(t.scheduledReleaseAt).getTime() : NaN;
-                        const endMs = t.scheduledEndAt ? new Date(t.scheduledEndAt).getTime() : NaN;
+                        const effectiveEndMs = getEffectiveTestEndMs(t);
                         const now = Date.now();
-                        const isExpired = !Number.isNaN(endMs) && endMs < now;
+                        const isExpired = effectiveEndMs !== null && effectiveEndMs < now;
                         const isScheduled = !Number.isNaN(startMs) && startMs > now;
                         return (
                         <tr key={t.id} className="hover:bg-slate-50">
@@ -1546,9 +1549,9 @@ export function AdminDashboard() {
                                 Starts: {new Date(t.scheduledReleaseAt).toLocaleString()}
                               </div>
                             )}
-                            {t.scheduledEndAt && (
+                            {effectiveEndMs !== null && (
                               <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                                Closes: {new Date(t.scheduledEndAt).toLocaleString()}
+                                Closes: {new Date(effectiveEndMs).toLocaleString()}
                               </div>
                             )}
                           </td>

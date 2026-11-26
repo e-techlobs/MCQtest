@@ -30,6 +30,7 @@ import { TestRunner } from './TestRunner';
 import { PrintablePaperModal } from './PrintablePaperModal';
 import { ScheduleAccessModal } from './ScheduleAccessModal';
 import { DeveloperFooter } from './DeveloperFooter';
+import { getEffectiveTestEndMs } from '../utils/studentRecord';
 
 export function TeacherDashboard() {
   const { userProfile, systemSettings, logout } = useAuth();
@@ -321,9 +322,9 @@ export function TeacherDashboard() {
                       const permittedClasses =
                         t.allowedGrades && t.allowedGrades.length > 0 ? t.allowedGrades : [t.grade];
                       const startMs = t.scheduledReleaseAt ? new Date(t.scheduledReleaseAt).getTime() : NaN;
-                      const endMs = t.scheduledEndAt ? new Date(t.scheduledEndAt).getTime() : NaN;
+                      const effectiveEndMs = getEffectiveTestEndMs(t);
                       const now = Date.now();
-                      const isExpired = !Number.isNaN(endMs) && endMs < now;
+                      const isExpired = effectiveEndMs !== null && effectiveEndMs < now;
                       const isScheduled = !Number.isNaN(startMs) && startMs > now;
                       return (
                       <tr key={t.id} className="hover:bg-slate-50">
@@ -357,9 +358,9 @@ export function TeacherDashboard() {
                               Starts: {new Date(t.scheduledReleaseAt).toLocaleString()}
                             </div>
                           )}
-                          {t.scheduledEndAt && (
+                          {effectiveEndMs !== null && (
                             <div className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                              Closes: {new Date(t.scheduledEndAt).toLocaleString()}
+                              Closes: {new Date(effectiveEndMs).toLocaleString()}
                             </div>
                           )}
                         </td>

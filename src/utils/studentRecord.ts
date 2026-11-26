@@ -27,6 +27,35 @@ export function parseRecordTimestampMs(value: unknown): number | null {
   return null;
 }
 
+const IMMEDIATE_TEST_AUTO_CLOSE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Computes the effective closing timestamp (ms) for an exam:
+ * 1. Explicit `scheduledEndAt` if set.
+ * 2. Otherwise `scheduledReleaseAt + durationMinutes` (min 15m) for scheduled papers.
+ * 3. Otherwise `createdAt + max(durationMinutes, 12h)` for unscheduled "Start Now" papers
+ *    so old exams never stay on Student Login indefinitely.
+ */
+export function getEffectiveTestEndMs(
+  test: Pick<MCQTest, 'scheduledEndAt' | 'scheduledReleaseAt' | 'durationMinutes' | 'createdAt'>,
+): number | null {
+  const explicitEndMs = parseRecordTimestampMs(test.scheduledEndAt);
+  if (explicitEndMs !== null) return explicitEndMs;
+
+  const durationMins = Math.max(Number(test.durationMinutes) || 60, 15);
+  const startMs = parseRecordTimestampMs(test.scheduledReleaseAt);
+  if (startMs !== null) {
+    return startMs + durationMins * 60_000;
+  }
+
+  const createdMs = parseRecordTimestampMs(test.createdAt);
+  if (createdMs !== null) {
+    return createdMs + Math.max(durationMins * 60_000, IMMEDIATE_TEST_AUTO_CLOSE_MS);
+  }
+
+  return null;
+}
+
 export interface StudentRecordRow {
   key: string;
   kind: 'present' | 'cancelled' | 'absent';
@@ -124,7 +153,7 @@ export function buildStudentPerformanceReport(input: {
   const hasSingleGrade = ['9th', '10th', '1st A', '2nd Year'].includes(studentGrade);
   conductedTests.forEach((test) => {
     if (!hasSingleGrade || !test.isActive || test.createdByRole === 'student_practice') return;
-    const endMs = parseRecordTimestampMs(test.scheduledEndAt);
+    const endMs = getEffectiveTestEndMs(test);
     if (endMs === null || nowMs <= endMs) return;
 
     const allowed =
